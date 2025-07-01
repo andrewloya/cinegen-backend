@@ -2,87 +2,120 @@
 
 import express from 'express';
 import axios from 'axios';
-import cors from 'cors'; // <-- 1. IMPORT THE CORS PACKAGE
+import cors from 'cors';
 import crypto from 'crypto';
+import { createClient } from 'redis'; // Import the Redis client
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// --- MIDDLEWARE SETUP ---
-app.use(cors()); // <-- 2. USE THE MIDDLEWARE. This is the fix!
-app.use(express.json());
+// --- Redis Client Setup ---
+// The Redis client is configured using the REDIS_URL environment variable,
+// which Render automatically provides when you link a Redis instance.
+let redisClient;
+(async () => {
+    try {
+        redisClient = createClient({ url: process.env.REDIS_URL });
+        redisClient.on('error', (err) => console.error('Redis Client Error', err));
+        await redisClient.connect();
+        console.log('Successfully connected to Redis.');
+    } catch (error) {
+        console.error('Failed to connect to Redis:', error);
+    }
+})();
 
-// A simple in-memory "database" to store job status.
-const jobs = {};
+
+// --- MIDDLEWARE SETUP ---
+app.use(cors());
+app.use(express.json());
 
 // ---
 // ENDPOINT 1: The Frontend calls this to start a new job
 // ---
 app.post('/api/generate', async (req, res) => {
   const jobId = crypto.randomUUID();
-  const { prompt, ratio, style } = req.body; // Corrected to match UI
-
-  jobs[jobId] = { status: 'pending' };
+  const { prompt, ratio, style } = req.body;
 
   try {
     const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
-    // NOTE: Make sure your Render app name is correct here
     const backendCallbackUrl = `https://cinegen-api.onrender.com/api/n8n-callback/${jobId}`;
 
-    console.log(`Starting job ${jobId}. Calling n8n and telling it to call back to ${backendCallbackUrl}`);
-
-    // Call the n8n webhook privately
-    axios.post(n8nWebhookUrl, {
+    // Await the call to n8n to ensure it's received before we proceed.
+    // This prevents telling the frontend a job started when it couldn't be sent.
+    await axios.post(n8nWebhookUrl, {
       prompt,
-      ratio, // Pass ratio
-      style, // Pass style
+      ratio,
+      style,
       jobId,
       callbackUrl: backendCallbackUrl,
     });
 
-    // Immediately respond to the frontend with the job ID.
+    // If the call to n8n is successful, store the pending job status in Redis.
+    // We set an expiration of 1 hour (3600 seconds) for the job key.
+    await redisClient.set(jobId, JSON.stringify({ status: 'pending' }), { EX: 3600 });
+    
+    console.log(`Job ${jobId} started successfully and stored in Redis.`);
     res.status(202).json({ jobId });
 
   } catch (error) {
     console.error("Error calling n8n webhook:", error.message);
-    jobs[jobId] = { status: 'failed', error: 'Failed to start job.' };
-    res.status(500).json({ message: 'Failed to start generation job.' });
+    res.status(500).json({ message: 'Failed to communicate with the generation service.' });
   }
 });
 
 // ---
 // ENDPOINT 2: The n8n workflow calls this when it's finished
 // ---
-app.post('/api/n8n-callback/:jobId', (req, res) => {
+app.post('/api/n8n-callback/:jobId', async (req, res) => {
   const { jobId } = req.params;
-  const { imageUrls } = req.body;
+  let { imageUrls } = req.body; // Use 'let' to allow modification
 
-  console.log(`Received callback for job ${jobId}.`);
+  console.log(`Received callback for job ${jobId}. Raw imageUrls type: ${typeof imageUrls}`);
 
-  // Update the job status and store the result
-  jobs[jobId] = { status: 'completed', result: imageUrls };
+  // --- THE FIX ---
+  // Check if imageUrls is a string that looks like an array. This is a common
+  // issue when data comes from n8n expressions.
+  if (typeof imageUrls === 'string' && imageUrls.startsWith('[') && imageUrls.endsWith(']')) {
+    try {
+      imageUrls = JSON.parse(imageUrls);
+      console.log('Successfully parsed imageUrls string into an array.');
+    } catch (e) {
+      console.error('Failed to parse imageUrls string, will store as empty array.', e);
+      imageUrls = []; // Default to empty array on parsing failure
+    }
+  }
+  // --- END FIX ---
 
-  // Respond to n8n to let it know we received the data
-  res.status(200).send('Callback received.');
+  // Update the job status in Redis with the final result.
+  await redisClient.set(jobId, JSON.stringify({ status: 'completed', result: imageUrls }), { EX: 3600 });
+  
+  res.status(200).send('Callback received and job updated in Redis.');
 });
 
 
 // ---
 // ENDPOINT 3: The Frontend calls this repeatedly to check job status
 // ---
-app.get('/api/status/:jobId', (req, res) => {
+app.get('/api/status/:jobId', async (req, res) => {
   const { jobId } = req.params;
-  const job = jobs[jobId];
+  
+  try {
+    const jobJSON = await redisClient.get(jobId);
 
-  if (!job) {
-    return res.status(404).json({ message: 'Job not found.' });
+    if (!jobJSON) {
+      return res.status(404).json({ message: 'Job not found. It may have expired or never existed.' });
+    }
+    
+    const job = JSON.parse(jobJSON);
+    res.status(200).json(job);
+
+  } catch (error) {
+    console.error('Error retrieving job from Redis:', error);
+    res.status(500).json({ message: 'Error checking job status.' });
   }
-
-  // Respond with the current job status and result (if completed)
-  res.status(200).json(job);
 });
 
 
 app.listen(PORT, () => {
-  console.log(`Backend server with CORS enabled listening on port ${PORT}`);
+  console.log(`Backend server with CORS and Redis enabled listening on port ${PORT}`);
 });
