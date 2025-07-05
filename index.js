@@ -15,35 +15,21 @@ const PORT = process.env.PORT || 3001;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- CORS CONFIGURATION ---
-const allowedOrigins = [
-  'https://your-netlify-site-name.netlify.app', // Replace with your actual Netlify URL
-  'http://localhost:8888' 
-];
+// --- CORS CONFIGURATION (DEBUGGING) ---
+// This temporarily allows requests from ANY origin to confirm if CORS is the issue.
+app.use(cors());
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  }
-};
 
-app.use(cors(corsOptions));
 app.use(express.json());
 
 
-// --- API ENDPOINTS ---
+// --- API ENDPOINTS (No changes needed in the logic here) ---
 
 const jobs = {}; // In-memory job store
 
 // ENDPOINT 1: The Frontend calls this to start a new job
 app.post('/api/generate', async (req, res) => {
   const jobId = crypto.randomUUID();
-  // Read all potential keys from the body
   const { prompt, ratio, style, workflow, optimizePrompt } = req.body;
 
   const webhookUrls = {
@@ -63,15 +49,13 @@ app.post('/api/generate', async (req, res) => {
   try {
     const backendCallbackUrl = `https://cinegen-api.onrender.com/api/n8n-callback/${jobId}`;
 
-    // --- THIS IS THE FIX ---
-    // Forward the 'optimizePrompt' key to the n8n webhook
     axios.post(n8nWebhookUrl, {
       prompt, 
       ratio, 
       style, 
       jobId, 
       callbackUrl: backendCallbackUrl,
-      optimizePrompt // <-- This line was missing
+      optimizePrompt
     }).catch(err => {
         console.error(`Error sending request to n8n workflow '${workflow}':`, err.message);
         jobs[jobId] = { status: 'failed', error: 'Failed to start job.' };
@@ -120,5 +104,5 @@ app.get('/api/status/:jobId', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`API-only server listening on port ${PORT}`);
+  console.log(`API-only server (DEBUG MODE) listening on port ${PORT}`);
 });
