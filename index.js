@@ -110,22 +110,3 @@ app.get('/api/status/:jobId', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Simplified backend server listening on port ${PORT}`);
 });
-```
-
-### Next Steps
-
-1.  **Update Environment Variables on Render**: Go to your Render dashboard and add the new environment variables. For example:
-    * `N8N_WORKFLOW_IMAGE` = `https://your-n8n-instance/webhook/image-gen-workflow`
-    * `N8N_WORKFLOW_VIDEO` = `https://your-n8n-instance/webhook/video-gen-workflow`
-
-2.  **Update Your Frontend**: As discussed previously, you must now update your `index.html` file's JavaScript to send the `workflow` identifier in the body of the request to `/api/generate`.
-
-    **Example of the new request body from your frontend:**
-    ```json
-    {
-        "prompt": "A cat in a hat",
-        "ratio": "1:1",
-        "style": "realistic",
-        "workflow": "IMAGE" 
-    }
-    
