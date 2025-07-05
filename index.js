@@ -15,15 +15,14 @@ const PORT = process.env.PORT || 3001;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- CORS CONFIGURATION (DEBUGGING) ---
-// This temporarily allows requests from ANY origin to confirm if CORS is the issue.
+// --- CORS CONFIGURATION ---
+// Temporarily allowing all origins for debugging.
+// For production, you should restrict this to your Netlify URL.
 app.use(cors());
-
-
 app.use(express.json());
 
 
-// --- API ENDPOINTS (No changes needed in the logic here) ---
+// --- API ENDPOINTS ---
 
 const jobs = {}; // In-memory job store
 
@@ -73,7 +72,7 @@ app.post('/api/generate', async (req, res) => {
 // ENDPOINT 2: The n8n workflow calls this when it's finished
 app.post('/api/n8n-callback/:jobId', (req, res) => {
   const { jobId } = req.params;
-  let { imageUrls } = req.body;
+  let { imageUrls, finalPrompt } = req.body;
 
   console.log(`Received callback for job ${jobId}.`);
 
@@ -86,7 +85,11 @@ app.post('/api/n8n-callback/:jobId', (req, res) => {
     }
   }
 
-  jobs[jobId] = { status: 'completed', result: imageUrls };
+  jobs[jobId] = { 
+    status: 'completed', 
+    result: imageUrls,
+    finalPrompt: finalPrompt || 'Prompt not provided'
+  };
   res.status(200).send('Callback received.');
 });
 
@@ -104,5 +107,5 @@ app.get('/api/status/:jobId', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`API-only server (DEBUG MODE) listening on port ${PORT}`);
+  console.log(`API-only server listening on port ${PORT}`);
 });
