@@ -16,19 +16,38 @@ app.use(express.json());
 const jobs = {};
 
 // ---
-// ENDPOINT 1: The Frontend calls this to start a new job
+// ENDPOINT 1: The Frontend calls this to start a new job (MODIFIED)
 // ---
 app.post('/api/generate', async (req, res) => {
   const jobId = crypto.randomUUID();
-  const { prompt, ratio, style } = req.body;
+  // --- CHANGE 1: Read the new 'workflow' property from the request body ---
+  const { prompt, ratio, style, workflow } = req.body;
+
+  // --- CHANGE 2: Create a lookup for your n8n webhook URLs ---
+  // Ensure you have set these environment variables in your Render dashboard.
+  const webhookUrls = {
+    'IMAGE': process.env.N8N_WORKFLOW_IMAGE,
+    'VIDEO': process.env.N8N_WORKFLOW_VIDEO,
+    // Add other workflows here as needed
+    // 'TRANSCODE': process.env.N8N_WORKFLOW_TRANSCODE, 
+  };
+
+  // --- CHANGE 3: Select the webhook URL based on the 'workflow' identifier ---
+  const n8nWebhookUrl = webhookUrls[workflow];
+
+  // --- CHANGE 4: Add error handling for an invalid workflow identifier ---
+  if (!n8nWebhookUrl) {
+    console.error(`Invalid workflow specified: ${workflow}`);
+    return res.status(400).json({ message: `Invalid workflow specified: ${workflow}` });
+  }
 
   jobs[jobId] = { status: 'pending' };
 
   try {
-    const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
+    // This URL must be your public Render URL
     const backendCallbackUrl = `https://cinegen-api.onrender.com/api/n8n-callback/${jobId}`;
 
-    // Fire-and-forget call to n8n
+    // Fire-and-forget call to the *selected* n8n webhook
     axios.post(n8nWebhookUrl, {
       prompt,
       ratio,
@@ -37,11 +56,11 @@ app.post('/api/generate', async (req, res) => {
       callbackUrl: backendCallbackUrl,
     }).catch(err => {
         // Log errors from the n8n call but don't crash the server
-        console.error("Error sending request to n8n:", err.message);
+        console.error(`Error sending request to n8n workflow '${workflow}':`, err.message);
         jobs[jobId] = { status: 'failed', error: 'Failed to start job.' };
     });
 
-    console.log(`Job ${jobId} started.`);
+    console.log(`Job ${jobId} started for workflow '${workflow}'.`);
     res.status(202).json({ jobId });
 
   } catch (error) {
@@ -51,7 +70,7 @@ app.post('/api/generate', async (req, res) => {
 });
 
 // ---
-// ENDPOINT 2: The n8n workflow calls this when it's finished
+// ENDPOINT 2: The n8n workflow calls this when it's finished (NO CHANGES NEEDED)
 // ---
 app.post('/api/n8n-callback/:jobId', (req, res) => {
   const { jobId } = req.params;
@@ -75,7 +94,7 @@ app.post('/api/n8n-callback/:jobId', (req, res) => {
 
 
 // ---
-// ENDPOINT 3: The Frontend calls this repeatedly to check job status
+// ENDPOINT 3: The Frontend calls this repeatedly to check job status (NO CHANGES NEEDED)
 // ---
 app.get('/api/status/:jobId', (req, res) => {
   const { jobId } = req.params;
@@ -91,3 +110,22 @@ app.get('/api/status/:jobId', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Simplified backend server listening on port ${PORT}`);
 });
+```
+
+### Next Steps
+
+1.  **Update Environment Variables on Render**: Go to your Render dashboard and add the new environment variables. For example:
+    * `N8N_WORKFLOW_IMAGE` = `https://your-n8n-instance/webhook/image-gen-workflow`
+    * `N8N_WORKFLOW_VIDEO` = `https://your-n8n-instance/webhook/video-gen-workflow`
+
+2.  **Update Your Frontend**: As discussed previously, you must now update your `index.html` file's JavaScript to send the `workflow` identifier in the body of the request to `/api/generate`.
+
+    **Example of the new request body from your frontend:**
+    ```json
+    {
+        "prompt": "A cat in a hat",
+        "ratio": "1:1",
+        "style": "realistic",
+        "workflow": "IMAGE" 
+    }
+    
